@@ -27,11 +27,10 @@ Function  Build-VMFromISO {
 
     try {
         
-
         #Check for needed modules and install if not found
-
         $modules = @(
             "WindowsImageTools"
+            "Hyper-ConvertImage"
         )
 
         $VMFolderPath = $VMsPath + $VMName
@@ -39,20 +38,26 @@ Function  Build-VMFromISO {
 
         foreach ($m in $modules) {
             if (!(get-module "$m*" -ListAvailable)) {
-                Write-Host "Installing $m module to currentUser.."
+                Write-Verbose "Installing $m module to currentUser.."
                 Install-Module -Name $m -Scope CurrentUser -Force
+                Import-Module -Name $m
             } else {
-                Write-Host "$m module is already available!"
+                Write-Verbose "$m module is already available!"
             }
         }
 
-        $mount = Mount-DiskImage -ImagePath $IsoPath
-        $volume = $mount | Get-Volume
-        $ImageSearchPath = $Volume.driveletter + ":\Sources\install.*"
-        $ImagePath = (Get-ChildItem -Path $ImageSearchPath).FullName
-        $edition = Get-WindowsImage -ImagePath $ImagePath | Out-GridView -PassThru -Title "Select an edition"
+        $mount = Mount-DiskImage -ImagePath $isoPath -StorageType ISO -PassThru
+        $driveLetter = ($mount | Get-Volume).DriveLetter
+        $SourcePath  = "$($driveLetter):\sources\install.wim"
+
+        Write-Verbose "Looking for $($SourcePath)..."
+        if (!(Test-Path $SourcePath))
+        {
+            throw "The specified ISO does not appear to be valid Windows installation media."
+        }
+        $edition = Get-WindowsImage -ImagePath $SourcePath | Out-GridView -PassThru -Title "Select an edition"
         while ($edition.count -ne 1) {
-            $edition = Get-WindowsImage -ImagePath $ImagePath | Out-GridView -PassThru -Title "Select JUST ONE edition"
+            $edition = Get-WindowsImage -ImagePath $SourcePath | Out-GridView -PassThru -Title "Select JUST ONE edition"
         }
 
         $VMSwitches = Get-VMSwitch
@@ -61,12 +66,12 @@ Function  Build-VMFromISO {
             $VMswitch = $VMSwitches | Out-GridView -PassThru -Title "Select JUST ONE virtual switch for your VM"
         }
 
-        if(!(Test-Path -path $VMFolderPath)){
-            # Create Path if doesn exist
+        # Create Path if it does not exist
+        if(!(Test-Path -path $VMFolderPath)) {
             $NewPath = New-Item -Path $VMFolderPath -Force -ItemType Directory
         }
 
-        $disk = Convert-Wim2VHD -Path $VMDiskPath -SourcePath $ISOPath -Dynamic -Size $Size -DiskLayout UEFI -Index $edition.ImageIndex
+        $disk = Convert-WindowsImage -VhdPath $VMDiskPath -SourcePath $ISOPath -Dynamic -SizeBytes $Size -DiskLayout UEFI -Edition $edition.ImageIndex -Passthru
 
         $vm = New-VM -Name $VMName -VHDPath $VMDiskPath -Path $VMFolderPath -MemoryStartupBytes $Memory -Generation 2 -BootDevice VHD -SwitchName $VMswitch.Name
 
@@ -75,12 +80,15 @@ Function  Build-VMFromISO {
         return $vm
     }   
 
-
     catch {
-        
-
-
+        $errorMsg = $_
     } 
+
+    finally {
+        if ($errrorMsg) {
+            Write-Warning $errorMsg
+        }
+    }
 
 
 } 
